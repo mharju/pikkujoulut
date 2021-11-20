@@ -2,7 +2,8 @@
   (:require [overtone.live :as l]
             [overtone.midi :as m]
             [overtone.at-at :as at-at]
-            [overtone.music.pitch :as p]))
+            [overtone.music.pitch :as p])
+  (:import javax.sound.midi.ShortMessage))
 
 (def output (m/midi-out "Virtual"))
 (def pool (at-at/mk-pool))
@@ -34,133 +35,78 @@
                            nil)))
           (remove nil?)))))))
 
-(defn schedule-euclidean [{:keys [hits notes note velocity duration note-duration channel offset] :or {offset 0}}]
-  (doseq [ts (euclidean hits notes offset)]
-    (at-at/at
-      (+ (at-at/now) (* ts duration))
-      #(m/midi-note output (if (keyword? note) (p/note note) note) velocity (or note-duration duration) channel) pool)))
+(defn schedule-euclidean [{:keys [notes beats steps offset note-duration channel] :or {offset 1 channel 0}}]
+  (let [now (at-at/now)
+        timing (->> (iterate (fn [x] (map (partial + steps) x)) (euclidean beats steps offset)) flatten)]
+    (->>
+      (map p/note (cycle notes))
+      (interleave timing)
+      (partition 2)
+      (map
+        (fn [[index note]]
+          (at-at/at
+            (+ now (* note-duration index))
+            #(m/midi-note output note 100 note-duration channel)
+            pool))))))
 
-(defn schedule-chord [{:keys [degree root-note mode num-notes note-duration]}]
-  (let [root (+ (p/note root-note) -12 (p/degree->interval degree mode))
-        [a b c d] (p/chord-degree degree root-note mode)]
-    (do
-      (schedule-euclidean {:hits     (/ num-notes 4)
-                           :notes    num-notes
-                           :note     (- root 24)
-                           :velocity (+ (rand-int 20) 80)
-                           :duration note-duration
-                           :channel  1})
-      (schedule-euclidean {:hits     5
-                           :notes    num-notes
-                           :note     a
-                           :velocity (+ (rand-int 20) 80)
-                           :duration note-duration
-                           :note-duration (/ note-duration 2)
-                           :channel  0})
-      (schedule-euclidean {:hits     3
-                           :notes    num-notes
-                           :offset   1
-                           :note     b
-                           :velocity (+ (rand-int 20) 80)
-                           :duration note-duration
-                           :note-duration (/ note-duration 2)
-                           :channel  0})
-      (schedule-euclidean {:hits     3
-                           :notes    num-notes
-                           :offset   1
-                           :note     c
-                           :velocity (+ (rand-int 50) 50)
-                           :duration (/ note-duration 2)
-                           :note-duration (/ note-duration 4)
-                           :channel  0}))))
+(defn unmute-part [part-num]
+  (m/midi-control output (+ 102 part-num) 0 part-num))
+(defn mute-part [part-num]
+  (m/midi-control output (+ 102 part-num) 127 part-num))
 
-(defn schedule-drums [{:keys [num-notes note-duration]}]
-  ;; Kick
-  (schedule-euclidean {:hits     (/ num-notes 2)
-                       :notes    num-notes
-                       :note     (rand-nth [:c2 :c#2 :d2])
-                       :velocity (+ 80 (rand-int 20))
-                       :duration note-duration
-                       :channel  2})
 
-  ;; Snare/snaps
-  (schedule-euclidean {:hits     (/ num-notes 4)
-                       :notes    num-notes
-                       :offset   2
-                       :note     :g2
-                       :velocity (+ 80 (rand-int 20))
-                       :duration note-duration
-                       :channel  2})
+(defn schedule-gong []
+  (schedule-euclidean {:notes [:c2 :d2 :a2 :b2 :c3]
+                       :beats 4
+                       :steps 7
+                       :offset (rand-int 2)
+                       :note-duration 300}))
 
-  ;; Snaps
-  (schedule-euclidean {:hits     (/ num-notes 2)
-                       :notes    num-notes
-                       :note     (rand-nth [:e2 :f2 :f#2])
-                       :velocity (+ 80 (rand-int 20))
-                       :duration note-duration
-                       :channel  2})
+(defn schedule-dabruka []
+  (schedule-euclidean {:notes [:c2]
+                       :beats 4
+                       :steps 7
+                       :offset 2
+                       :note-duration 300
+                       :channel 1}))
 
-  ;; Hats
-  (schedule-euclidean {:hits num-notes
-                       :notes (/ num-notes (inc (rand-int 2)))
-                       :note (rand-nth [:g#2 :a2])
-                       :velocity (+ 80 (rand-int 20))
-                       :duration note-duration
+(defn schedule-metal []
+  (schedule-euclidean {:notes [:c#2 :d2 :d#2 :e2 :f2 :d2 :f2 :e5]
+                       :beats (rand-int 4)
+                       :steps 7
+                       :offset 0
+                       :note-duration 300
                        :channel 2}))
 
-(def progression-chain
-  {:i   {:i 0   :ii 0   :iii 0   :iv 0.6 :v 0.2 :vi 0.2 :vii 0}
-   :ii  {:i 0.8 :ii 0   :iii 0   :iv 0   :v 0   :vi 0   :vii 0.2}
-   :iii {:i 1.0 :ii 0   :iii 0   :iv 0   :v 0   :vi 0   :vii 0}
-   :iv  {:i 0.1 :ii 0   :iii 0.1 :iv 0   :v 0.2 :vi 0.6 :vii 0}
-   :v   {:i 0.2 :ii 0   :iii 0   :iv 0.8 :v 0   :vi 0   :vii 0}
-   :vi  {:i 0.5 :ii 0   :iii 0   :iv 0.5 :v 0   :vi 0   :vii 0}
-   :vii {:i 1.0 :ii 0   :iii 0   :iv 0   :v 0   :vi 0   :vii 0}})
+(defn schedule-strings [on-or-off]
+  (doseq [note (conj (p/chord-degree :i :c2 :minor) (p/note :c1))]
+    (if (= on-or-off :on)
+      (m/midi-note-on output note 100 3)
+      (m/midi-note-off output note 3))))
 
-(defn markov [probabilities current-state]
-  (let [rnd (rand)
-        states (get probabilities current-state)]
-    (reduce
-      (fn [acc [k prob]]
-        (if (pos? prob)
-          (let [prev (or (second (second (last acc))) 0.0)]
-            (if (< prev rnd (+ prev prob))
-              (reduced k)
-              (conj acc [k [prev (+ prev prob)]])))
-          acc))
-      []
-      states)))
-
+(defn schedule-kick []
+  (schedule-euclidean {:notes [:e4]
+                       :beats 1
+                       :steps 7
+                       :offset 0
+                       :note-duration 300
+                       :channel 4}))
 (def composition
-  (future-call
-    (fn []
-      (let [num-notes 8 #_(+ 8 (* 2 (rand-int 5)))
-            note-duration 250
-            duration (* num-notes note-duration)
-            mode (rand-nth [:major :melodic-minor :dorian :mixolydian])
-            root-note (rand-nth [:c5 :c#5 :d5 :f5])
-            degrees (take 50 (iterate (partial markov progression-chain) :i))]
-
-        ;; Chords
-        (->> degrees
-             (map-indexed (fn [index degree]
-                            (at-at/at
-                              (+ (at-at/now) (* index duration))
-                              (fn []
-                                (schedule-drums {:num-notes     num-notes
-                                                 :note-duration note-duration})
-                                (schedule-chord {:degree        degree
-                                                 :root-note     root-note
-                                                 :mode          mode
-                                                 :num-notes     num-notes
-                                                 :note-duration note-duration})) pool)))
-             doall)))))
+  (future
+    (let [steps (* 7 50)
+          parts [schedule-gong schedule-dabruka schedule-metal schedule-kick]]
+      (schedule-strings :on)
+      (doseq [part parts]
+        (doall (take steps (part)))))))
 
 (defn stop []
   (at-at/stop-and-reset-pool! pool :strategy :kill)
+  (schedule-strings :off)
   (future-cancel composition))
 
 (comment
+  (schedule-strings :on)
+  (schedule-strings :off)
   (l/demo (l/sin-osc))
   (stop)
 
