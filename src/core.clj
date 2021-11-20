@@ -12,101 +12,107 @@
   ([n m]
    (euclidean n m 0))
   ([n m offset]
-  (loop [front (repeat (* n 2) [:tick])
-         back (repeat (* (- m n) 2) [:tock])]
-    (let [a (mapv (fn [a b] (into a b)) front back)
-          b (cond
-              (zero? (count back))
-              front
+   (loop [front (repeat (* n 2) [:tick])
+          back (repeat (* (- m n) 2) [:tock])]
+     (let [a (mapv (fn [a b] (into a b)) front back)
+           b (cond
+               (zero? (count back))
+               front
 
-              (< (count front) (count back))
-              (vec (drop (count front) back))
+               (< (count front) (count back))
+               (vec (drop (count front) back))
 
-              :else
-              (vec (drop (count back) front)))]
-      (if (and (pos? (count a)) (> (count b) 1))
-        (recur a b)
-        (->>
-          (flatten [a b])
-          (take m)
-          (map-indexed (fn [index t]
-                         (if (= :tick t)
-                           (+ index offset)
-                           nil)))
-          (remove nil?)))))))
+               :else
+               (vec (drop (count back) front)))]
+       (if (and (pos? (count a)) (> (count b) 1))
+         (recur a b)
+         (->>
+           (flatten [a b])
+           (take m)
+           (map-indexed (fn [index t]
+                          (if (= :tick t)
+                            (+ index offset)
+                            nil)))
+           (remove nil?)))))))
 
-(defn schedule-euclidean [{:keys [notes beats steps offset note-duration channel] :or {offset 1 channel 0}}]
-  (let [now (at-at/now)
-        timing (->> (iterate (fn [x] (map (partial + steps) x)) (euclidean beats steps offset)) flatten)]
+(defn generate-euclidean [{:keys [ts notes beats steps offset note-duration channel] :or {offset 1 channel 0 ts (at-at/now)}}]
+  (let [timing (->> (iterate (fn [x] (map (partial + steps) x)) (euclidean beats steps offset)) flatten)]
     (->>
       (map p/note (cycle notes))
       (interleave timing)
       (partition 2)
       (map
         (fn [[index note]]
-          (at-at/at
-            (+ now (* note-duration index))
-            #(m/midi-note output note 100 note-duration channel)
-            pool))))))
+          [(+ ts (* note-duration index))
+           #(m/midi-note output note 100 note-duration channel)])))))
 
-(defn unmute-part [part-num]
-  (m/midi-control output (+ 102 part-num) 0 part-num))
-(defn mute-part [part-num]
-  (m/midi-control output (+ 102 part-num) 127 part-num))
-
-
-(defn schedule-gong []
-  (schedule-euclidean {:notes [:c2 :d2 :a2 :b2 :c3]
-                       :beats 4
-                       :steps 7
-                       :offset (rand-int 2)
+(defn generate-gong [ts]
+  (generate-euclidean {:notes         [:c2 :d2 :a2 :b2 :c3]
+                       :beats         4
+                       :steps         7
+                       :offset        (rand-int 2)
+                       :ts            ts
                        :note-duration 300}))
 
-(defn schedule-dabruka []
-  (schedule-euclidean {:notes [:c2]
-                       :beats 4
-                       :steps 7
-                       :offset 2
-                       :note-duration 300
-                       :channel 1}))
+(defn generate-dabruka [ts]
+  (generate-euclidean {:notes         [:c2]
+                       :beats         4
+                       :steps         7
+                       :offset        2
+                       :channel       1
+                       :ts            ts
+                       :note-duration 300}))
 
-(defn schedule-metal []
-  (schedule-euclidean {:notes [:c#2 :d2 :d#2 :e2 :f2 :d2 :f2 :e5]
-                       :beats (rand-int 4)
-                       :steps 7
-                       :offset 0
-                       :note-duration 300
-                       :channel 2}))
+(defn generate-metal [ts]
+  (generate-euclidean {:notes         [:c#2 :d#2 :e2 :f2 :d2 :f2 :e5]
+                       :beats         (inc (rand-int 4))
+                       :steps         7
+                       :offset        1
+                       :channel       2
+                       :ts            ts
+                       :note-duration 300}))
 
-(defn schedule-strings [on-or-off]
-  (doseq [note (conj (p/chord-degree :i :c2 :minor) (p/note :c1))]
-    (if (= on-or-off :on)
-      (m/midi-note-on output note 100 3)
-      (m/midi-note-off output note 3))))
+(defn generate-strings [ts on-or-off]
+  (at-at/at
+    ts
+    #(doseq [note (conj (p/chord-degree :i :c2 :minor) (p/note :c1))]
+       (if (= on-or-off :on)
+         (m/midi-note-on output note 100 3)
+         (m/midi-note-off output note 3)))
+    pool))
 
-(defn schedule-kick []
-  (schedule-euclidean {:notes [:e4]
-                       :beats 1
-                       :steps 7
-                       :offset 0
-                       :note-duration 300
-                       :channel 4}))
+(defn generate-kick [ts]
+  (generate-euclidean {:notes         [:e4]
+                       :beats         1
+                       :steps         7
+                       :offset        0
+                       :channel       4
+                       :ts            ts
+                       :note-duration 300}))
+
 (def composition
   (future
-    (let [steps (* 7 50)
-          parts [schedule-gong schedule-dabruka schedule-metal schedule-kick]]
-      (schedule-strings :on)
-      (doseq [part parts]
-        (doall (take steps (part)))))))
+    (let [steps 7
+          duration (* steps 300)
+          parts [generate-gong generate-dabruka generate-metal generate-kick]]
+      (at-at/every
+        duration
+        (fn []
+          (let [ts (at-at/now)]
+            (generate-strings ts :on)
+            (doseq [part parts]
+              (doseq [[ts pfn] (take steps (part ts))]
+                  (at-at/at ts pfn pool)))))
+        pool))))
 
 (defn stop []
   (at-at/stop-and-reset-pool! pool :strategy :kill)
-  (schedule-strings :off)
+  (generate-strings (at-at/now) :off)
   (future-cancel composition))
 
 (comment
-  (schedule-strings :on)
-  (schedule-strings :off)
+  (generate-strings (at-at/now) :on)
+  (generate-strings (at-at/now) :off)
   (l/demo (l/sin-osc))
   (stop)
 
