@@ -1,6 +1,5 @@
 (ns core
-  (:require [overtone.live :as l]
-            [overtone.midi :as m]
+  (:require [overtone.midi :as m]
             [overtone.at-at :as at-at]
             [overtone.music.pitch :as p])
   (:import javax.sound.midi.ShortMessage))
@@ -64,7 +63,7 @@
                        :note-duration 300}))
 
 (defn generate-metal [ts]
-  (generate-euclidean {:notes         [:c#2 :d#2 :e2 :f2 :d2 :f2 :e5]
+  (generate-euclidean {:notes         [:c3 :d3]
                        :beats         (inc (rand-int 4))
                        :steps         7
                        :offset        1
@@ -75,7 +74,7 @@
 (defn generate-strings [ts on-or-off]
   (at-at/at
     ts
-    #(doseq [note (conj (p/chord-degree :i :c2 :minor) (p/note :c1))]
+    #(doseq [note (conj (take 3 (p/chord-degree :i :a3 :minor)) (p/note :a1))]
        (if (= on-or-off :on)
          (m/midi-note-on output note 100 3)
          (m/midi-note-off output note 3)))
@@ -91,19 +90,18 @@
                        :note-duration 300}))
 
 (def composition
-  (future
-    (let [steps 7
-          duration (* steps 300)
-          parts [generate-gong generate-dabruka generate-metal generate-kick]]
-      (at-at/every
-        duration
-        (fn []
-          (let [ts (at-at/now)]
-            (generate-strings ts :on)
-            (doseq [part parts]
-              (doseq [[ts pfn] (take steps (part ts))]
+    (future
+      (let [steps 7
+            duration (* steps 300)
+            parts [#'generate-gong #'generate-dabruka #'generate-metal #'generate-kick]]
+        (at-at/every
+          duration
+          (fn []
+            (let [ts (at-at/now)]
+              (doseq [part parts]
+                (doseq [[ts pfn] (take steps (part ts))]
                   (at-at/at ts pfn pool)))))
-        pool))))
+          pool))))
 
 (defn stop []
   (at-at/stop-and-reset-pool! pool :strategy :kill)
@@ -111,8 +109,12 @@
   (future-cancel composition))
 
 (comment
-  (generate-strings (at-at/now) :on)
-  (generate-strings (at-at/now) :off)
+  (def player
+    (future
+      (generate-strings (at-at/now) :on)))
+  (def player
+    (future
+      (generate-strings (at-at/now) :off) pool))
   (l/demo (l/sin-osc))
   (stop)
 
