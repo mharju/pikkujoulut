@@ -4,6 +4,7 @@
             [overtone.music.pitch :as p])
   (:import javax.sound.midi.ShortMessage))
 
+(declare steps)
 (def output (m/midi-out "Virtual"))
 (def pool (at-at/mk-pool))
 
@@ -34,21 +35,24 @@
                             nil)))
            (remove nil?)))))))
 
+(defn euclidean-seq [beats steps offset]
+  (->> (iterate (fn [x] (map (partial + steps) x)) (euclidean beats steps offset))
+       flatten))
+
 (defn generate-euclidean [{:keys [ts notes beats steps offset note-duration channel] :or {offset 1 channel 0 ts (at-at/now)}}]
-  (let [timing (->> (iterate (fn [x] (map (partial + steps) x)) (euclidean beats steps offset)) flatten)]
-    (->>
+  (->>
       (map p/note (cycle notes))
-      (interleave timing)
+      (interleave (euclidean-seq beats steps offset))
       (partition 2)
       (map
         (fn [[index note]]
           [(+ ts (* note-duration index))
-           #(m/midi-note output note 100 note-duration channel)])))))
+           #(m/midi-note output note 100 note-duration channel)]))))
 
 (defn generate-gong [ts]
   (generate-euclidean {:notes         [:c2 :d2 :a2 :b2 :c3]
                        :beats         4
-                       :steps         7
+                       :steps         steps
                        :offset        (rand-int 2)
                        :ts            ts
                        :note-duration 300}))
@@ -56,16 +60,16 @@
 (defn generate-dabruka [ts]
   (generate-euclidean {:notes         [:c2]
                        :beats         4
-                       :steps         7
+                       :steps         steps
                        :offset        2
                        :channel       1
                        :ts            ts
                        :note-duration 300}))
 
 (defn generate-metal [ts]
-  (generate-euclidean {:notes         [:c3 :d3]
+  (generate-euclidean {:notes         [:c3 :d3 :c4 :d4]
                        :beats         (inc (rand-int 4))
-                       :steps         7
+                       :steps         steps
                        :offset        1
                        :channel       2
                        :ts            ts
@@ -83,17 +87,50 @@
 (defn generate-kick [ts]
   (generate-euclidean {:notes         [:e4]
                        :beats         1
-                       :steps         7
+                       :steps         steps
                        :offset        0
                        :channel       4
                        :ts            ts
                        :note-duration 300}))
 
+
+(let [melody [:a5 :e5 :c5 :b5 :a5 :c5 :d5 :g5]
+      offset-steps (euclidean-seq 3 22 0)
+      melody-generator (apply concat
+                              (map-indexed
+                                (fn [i offset]
+                                  (let [soff (mod i (count melody))]
+                                    (->> melody (drop soff))))
+                                offset-steps))
+      current-offset (atom 0)]
+  (defn generate-melody [ts steps]
+    (doseq [[index note] (map-indexed vector (->> melody-generator (drop @current-offset) (take steps)))
+            :let [ts (+ ts (* 600 index))]]
+      (at-at/at
+        ts
+        #(m/midi-note output (p/note note) 100 600 5)
+        pool))
+    (swap! current-offset + steps)))
+
+(def steps 7)
+(def parts
+  #_[#'generate-gong]
+  [#'generate-gong #'generate-kick]
+  #_[#'generate-gong #'generate-kick #'generate-dabruka]
+  #_[#'generate-gong #'generate-kick #'generate-dabruka #'generate-metal]
+  )
+
+(def strings
+  (future
+    (generate-strings (at-at/now) :off)))
+(def melody
+  (future
+    (generate-melody (at-at/now) 20)))
+
 (def composition
     (future
       (let [steps 7
-            duration (* steps 300)
-            parts [#'generate-gong #'generate-dabruka #'generate-metal #'generate-kick]]
+            duration (* steps 300)]
         (at-at/every
           duration
           (fn []
@@ -111,11 +148,7 @@
 (comment
   (def player
     (future
-      (generate-strings (at-at/now) :on)))
-  (def player
-    (future
       (generate-strings (at-at/now) :off) pool))
-  (l/demo (l/sin-osc))
   (stop)
 
   (defn play [degree]
