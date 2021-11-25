@@ -8,7 +8,11 @@
 (def output (m/midi-out "Virtual"))
 (def pool (at-at/mk-pool))
 
+;; TIMING GENERATION FUNCTIONS
+
 (defn euclidean
+  "Euclidean rhythm generator.
+   Computes N steps evenly to M beats with offset O"
   ([n m]
    (euclidean n m 0))
   ([n m offset]
@@ -49,6 +53,8 @@
           [(+ ts (* note-duration index))
            #(m/midi-note output note 100 note-duration channel)]))))
 
+;; SONG PARTS
+
 (defn generate-gong [ts]
   (generate-euclidean {:notes         [:c2 :d2 :a2 :b2 :c3]
                        :beats         4
@@ -68,9 +74,9 @@
 
 (defn generate-metal [ts]
   (generate-euclidean {:notes         [:c3 :d3 :c4 :d4]
-                       :beats         (inc (rand-int 4))
+                       :beats         (inc (rand-int 3))
                        :steps         steps
-                       :offset        1
+                       :offset        2
                        :channel       2
                        :ts            ts
                        :note-duration 300}))
@@ -104,7 +110,11 @@
                                 offset-steps))
       current-offset (atom 0)]
   (defn generate-melody [ts steps]
-    (doseq [[index note] (map-indexed vector (->> melody-generator (drop @current-offset) (take steps)))
+    (doseq [[index note] (map-indexed
+                           vector
+                           (->> melody-generator
+                                (drop @current-offset)
+                                (take steps)))
             :let [ts (+ ts (* 600 index))]]
       (at-at/at
         ts
@@ -112,33 +122,37 @@
         pool))
     (swap! current-offset + steps)))
 
+;; SONG CONSTRUCTION & PLAYGROUND
+
 (def steps 7)
 (def parts
-  #_[#'generate-gong]
-  [#'generate-gong #'generate-kick]
+  [#'generate-gong]
+  #_[#'generate-gong #'generate-kick]
   #_[#'generate-gong #'generate-kick #'generate-dabruka]
   #_[#'generate-gong #'generate-kick #'generate-dabruka #'generate-metal]
   )
 
-(def strings
+#_(def strings
   (future
-    (generate-strings (at-at/now) :off)))
-(def melody
+    (generate-strings (at-at/now) :on)))
+#_(def melody
   (future
     (generate-melody (at-at/now) 20)))
 
 (def composition
-    (future
-      (let [steps 7
-            duration (* steps 300)]
-        (at-at/every
-          duration
-          (fn []
-            (let [ts (at-at/now)]
-              (doseq [part parts]
-                (doseq [[ts pfn] (take steps (part ts))]
-                  (at-at/at ts pfn pool)))))
-          pool))))
+  (future
+    (let [steps 7
+          duration (* steps 300)]
+      #_(generate-strings (at-at/now) :on)
+      (at-at/every
+        duration
+        (fn []
+          (let [ts (at-at/now)]
+            #_(generate-melody ts (inc (rand-int 3)))
+            (doseq [part parts]
+              (doseq [[ts pfn] (take steps (part ts))]
+                (at-at/at ts pfn pool)))))
+        pool))))
 
 (defn stop []
   (at-at/stop-and-reset-pool! pool :strategy :kill)
