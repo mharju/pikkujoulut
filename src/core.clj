@@ -1,10 +1,27 @@
 (ns core
-  (:require [overtone.midi :as m]
-            [overtone.at-at :as at-at]
-            [overtone.music.pitch :as p])
-  (:import javax.sound.midi.ShortMessage))
+  (:require [overtone.at-at :as at-at]
+            [overtone.midi :as m]
+            [overtone.music.pitch :as p]))
 
-(declare steps)
+;; ████████╗░█████╗░██╗░██████╗████████╗███████╗
+;; ╚══██╔══╝██╔══██╗██║██╔════╝╚══██╔══╝██╔════╝
+;; ░░░██║░░░███████║██║╚█████╗░░░░██║░░░█████╗░░
+;; ░░░██║░░░██╔══██║██║░╚═══██╗░░░██║░░░██╔══╝░░
+;; ░░░██║░░░██║░░██║██║██████╔╝░░░██║░░░███████╗
+;; ░░░╚═╝░░░╚═╝░░╚═╝╚═╝╚═════╝░░░░╚═╝░░░╚══════╝
+;; Pikkujoulu party 2021
+;; DOES EINSTEIN DREAM OF EUCLIDEAN SHEEP?
+;;
+;; Generative composition with Clojure, Overtone and Ableton Live
+;;
+;; Uses Euclidean Rhythm algorithm with some random variations to
+;; generate interesting rhytmic ambient piece.
+;;
+;; Grab the earphones and take a listen!
+;;
+;; Maybe browse the source too with the arrow keys. Press gg to jump back.
+;; (Don't worry. This is the VIM editor so you can't exit it by mistake!)
+
 (def output (m/midi-out "Virtual"))
 (def pool (at-at/mk-pool))
 
@@ -55,31 +72,31 @@
 
 ;; SONG PARTS
 
-(defn generate-gong [ts]
+(defn generate-gong [ts steps note-duration]
   (generate-euclidean {:notes         [:c2 :d2 :a2 :b2 :c3]
                        :beats         4
                        :steps         steps
                        :offset        (rand-int 2)
                        :ts            ts
-                       :note-duration 300}))
+                       :note-duration note-duration}))
 
-(defn generate-dabruka [ts]
+(defn generate-dabruka [ts steps note-duration]
   (generate-euclidean {:notes         [:c2]
                        :beats         4
                        :steps         steps
                        :offset        2
                        :channel       1
                        :ts            ts
-                       :note-duration 300}))
+                       :note-duration note-duration}))
 
-(defn generate-metal [ts]
+(defn generate-metal [ts steps note-duration]
   (generate-euclidean {:notes         [:c3 :d3 :c4 :d4]
                        :beats         (inc (rand-int 3))
                        :steps         steps
                        :offset        2
                        :channel       2
                        :ts            ts
-                       :note-duration 300}))
+                       :note-duration note-duration}))
 
 (defn generate-strings [ts on-or-off]
   (at-at/at
@@ -90,15 +107,14 @@
          (m/midi-note-off output note 3)))
     pool))
 
-(defn generate-kick [ts]
+(defn generate-kick [ts steps note-duration]
   (generate-euclidean {:notes         [:e4]
                        :beats         1
                        :steps         steps
                        :offset        0
                        :channel       4
                        :ts            ts
-                       :note-duration 300}))
-
+                       :note-duration note-duration}))
 
 (let [melody [:a5 :e5 :c5 :b5 :a5 :c5 :d5 :g5]
       offset-steps (euclidean-seq 3 22 0)
@@ -108,51 +124,45 @@
                                   (let [soff (mod i (count melody))]
                                     (->> melody (drop soff))))
                                 offset-steps))
+      ;; We live in an immutable world, so make it mutable!
+      ;; Every call of generate-melody starts from where the last one left
       current-offset (atom 0)]
-  (defn generate-melody [ts steps]
+  (defn generate-melody [ts steps note-duration]
     (doseq [[index note] (map-indexed
                            vector
                            (->> melody-generator
                                 (drop @current-offset)
                                 (take steps)))
-            :let [ts (+ ts (* 600 index))]]
+            :let [ts (+ ts (* note-duration 2 index))]]
       (at-at/at
         ts
-        #(m/midi-note output (p/note note) 100 600 5)
+        #(m/midi-note output (p/note note) 100 (* note-duration 2) 5)
         pool))
     (swap! current-offset + steps)))
 
 ;; SONG CONSTRUCTION & PLAYGROUND
 
-(def steps 7)
 (def parts
-  [#'generate-gong]
+  #_[#'generate-gong]
   #_[#'generate-gong #'generate-kick]
   #_[#'generate-gong #'generate-kick #'generate-dabruka]
-  #_[#'generate-gong #'generate-kick #'generate-dabruka #'generate-metal]
+  [#'generate-gong #'generate-kick #'generate-dabruka #'generate-metal]
   )
 
-#_(def strings
-  (future
-    (generate-strings (at-at/now) :on)))
-#_(def melody
-  (future
-    (generate-melody (at-at/now) 20)))
+(defn composition-fn [steps note-duration]
+  (let [ts (at-at/now)]
+    (generate-melody ts (inc (rand-int 3)) note-duration)
+    (doseq [part parts]
+      (doseq [[ts pfn] (take steps (part ts steps note-duration))]
+        (at-at/at ts pfn pool)))))
 
 (def composition
   (future
     (let [steps 7
-          duration (* steps 300)]
-      #_(generate-strings (at-at/now) :on)
-      (at-at/every
-        duration
-        (fn []
-          (let [ts (at-at/now)]
-            #_(generate-melody ts (inc (rand-int 3)))
-            (doseq [part parts]
-              (doseq [[ts pfn] (take steps (part ts))]
-                (at-at/at ts pfn pool)))))
-        pool))))
+          note-duration 300
+          duration (* steps note-duration)]
+      (generate-strings (at-at/now) :on)
+      (at-at/every duration (partial #'composition-fn steps note-duration) pool))))
 
 (defn stop []
   (at-at/stop-and-reset-pool! pool :strategy :kill)
@@ -160,14 +170,11 @@
   (future-cancel composition))
 
 (comment
-  (def player
-    (future
-      (generate-strings (at-at/now) :off) pool))
   (stop)
 
   (defn play [degree]
     (doseq [note (p/chord-degree degree :c3 :ionian)]
-      (m/midi-note output note 100 400)))
+      (m/midi-note output note 100 400 5)))
   (do
     (def job-1 (at-at/every 1500 (partial play :ii) pool))
     (def job-2 (at-at/every 1500 (partial play :v) pool :initial-delay 750))
