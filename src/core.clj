@@ -68,7 +68,7 @@
       (map
         (fn [[index note]]
           [(+ ts (* note-duration index))
-           #(m/midi-note output note 100 note-duration channel)]))))
+           #(m/midi-note output note 80 note-duration channel)]))))
 
 ;; SONG PARTS
 
@@ -90,7 +90,7 @@
                        :note-duration note-duration}))
 
 (defn generate-metal [ts steps note-duration]
-  (generate-euclidean {:notes         [:c3 :d3 :c4 :d4]
+  (generate-euclidean {:notes         [:c3 :g3 :c4 :d4]
                        :beats         (inc (rand-int 3))
                        :steps         steps
                        :offset        2
@@ -108,15 +108,16 @@
     pool))
 
 (defn generate-kick [ts steps note-duration]
-  (generate-euclidean {:notes         [:e4]
+  (generate-euclidean {:notes         [:d4]
                        :beats         1
-                       :steps         steps
+                       :steps         steps +1
                        :offset        0
                        :channel       4
                        :ts            ts
                        :note-duration note-duration}))
 
-(let [melody [:a5 :e5 :c5 :b5 :a5 :c5 :d5 :g5]
+(let [melody #_[:a5 :e5 :c5 :b5 :a5 :c5 :d5 :g5]
+             (p/chord-degree :i :a5 :dorian)
       offset-steps (euclidean-seq 3 22 0)
       melody-generator (apply concat
                               (map-indexed
@@ -136,7 +137,7 @@
             :let [ts (+ ts (* note-duration 2 index))]]
       (at-at/at
         ts
-        #(m/midi-note output (p/note note) 100 (* note-duration 2) 5)
+        #(m/midi-note output note #_(p/note note) 100 (* note-duration 2) 5)
         pool))
     (swap! current-offset + steps)))
 
@@ -159,7 +160,7 @@
 (def composition
   (future
     (let [steps 7
-          note-duration 300
+          note-duration 250
           duration (* steps note-duration)]
       (generate-strings (at-at/now) :on)
       (at-at/every duration (partial #'composition-fn steps note-duration) pool))))
